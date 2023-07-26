@@ -2,6 +2,7 @@
 import React from "react";
 
 type AnyFunction = (...args: any[]) => any;
+const noop = () => void 0;
 
 /**
  * Suppress the warning when using useLayoutEffect with SSR. (https://reactjs.org/link/uselayouteffect-ssr)
@@ -11,7 +12,7 @@ const useInsertionEffect =
   typeof window !== "undefined"
     ? // useInsertionEffect is available in React 18+
       React.useInsertionEffect || React.useLayoutEffect
-    : () => {};
+    : noop;
 
 /**
  * Similar to useCallback, with a few subtle differences:
@@ -20,11 +21,12 @@ const useInsertionEffect =
  * - Properties or state accessed within the callback will always be "current"
  */
 export function useEvent<TCallback extends AnyFunction>(
-  callback: TCallback
+  callback: TCallback,
 ): TCallback {
   // Keep track of the latest callback:
   const latestRef = React.useRef<TCallback>(
-    useEvent_shouldNotBeInvokedBeforeMount as any
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+    useEvent_shouldNotBeInvokedBeforeMount as any,
   );
   useInsertionEffect(() => {
     latestRef.current = callback;
@@ -32,9 +34,10 @@ export function useEvent<TCallback extends AnyFunction>(
 
   // Create a stable callback that always calls the latest callback:
   // using useRef instead of useCallback avoids creating and empty array on every render
-  const stableRef = React.useRef<TCallback>(null as any);
+  const stableRef = React.useRef<TCallback>();
   if (!stableRef.current) {
     stableRef.current = function (this: any) {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-return, prefer-rest-params, @typescript-eslint/no-unsafe-argument
       return latestRef.current.apply(this, arguments as any);
     } as TCallback;
   }
@@ -48,6 +51,6 @@ export function useEvent<TCallback extends AnyFunction>(
  */
 function useEvent_shouldNotBeInvokedBeforeMount() {
   throw new Error(
-    "INVALID_USEEVENT_INVOCATION: the callback from useEvent cannot be invoked before the component has mounted."
+    "INVALID_USEEVENT_INVOCATION: the callback from useEvent cannot be invoked before the component has mounted.",
   );
 }

@@ -10,6 +10,7 @@ coverage
 
 # next.js
 .next/
+**/next-env.d.ts
 out/
 build
 
@@ -32,3 +33,6 @@ yarn-error.log*
 
 # turbo
 .turbo
+
+dist
+.solid

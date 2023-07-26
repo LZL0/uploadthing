@@ -1,8 +1,10 @@
-import fs from "fs";
 import { exec } from "child_process";
+import fs from "fs";
 
 const pkgJsonPaths = [
   "packages/uploadthing/package.json",
+  "packages/shared/package.json",
+  "packages/mime-types/package.json",
   "packages/react/package.json",
 ];
 try {
@@ -25,11 +27,11 @@ try {
       const newContent = content
         .replace(
           new RegExp(`"@uploadthing/\\*": "${oldVersion}"`, "g"),
-          `"@uploadthing/*": "${newVersion}"`
+          `"@uploadthing/*": "${newVersion}"`,
         )
         .replace(
           new RegExp(`"uploadthing": "${oldVersion}"`, "g"),
-          `"uploadthing": "${newVersion}"`
+          `"uploadthing": "${newVersion}"`,
         );
 
       fs.writeFileSync(pkgJsonPath, newContent);

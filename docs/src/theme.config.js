@@ -1,5 +1,7 @@
-import { useConfig } from "nextra-theme-docs";
 import { useRouter } from "next/router";
+import { useConfig } from "nextra-theme-docs";
+
+import { Pre } from "./components/Pre";
 
 const hackedCss = `
 body {
@@ -39,6 +41,7 @@ body {
   --tw-text-opacity: 1;
   color: rgb(220 38 38 / var(--tw-text-opacity));
 }
+
 
 .hover\:cursor-pointer:hover {
   cursor: pointer;
@@ -85,7 +88,7 @@ const Head = () => {
 export const Logo = () => {
   return (
     <h1 className="flex flex-row items-baseline text-2xl font-bold">
-      <span className="tracking-tight hover:cursor-pointer">
+      <span className="tracking-tight hover:cursor-pointer dark:text-white">
         {`upload`}
         <span className="text-red-600">{`thing`}</span>
         <span className="ml-1 font-semibold">docs</span>
@@ -102,7 +105,8 @@ const config = {
   chat: {
     link: "https://discord.gg/UCXkw6xj2K",
   },
-  darkMode: false,
+
+  darkMode: true,
   editLink: {
     component: () => null,
   },
@@ -110,12 +114,18 @@ const config = {
     content: () => null,
   },
   footer: { component: () => null },
+  components: {
+    pre: Pre,
+  },
   head: Head,
   logo: Logo,
   nextThemes: {
-    forcedTheme: "light",
+    defaultTheme: "light",
   },
   primaryHue: 348,
+  project: {
+    link: "https://github.com/pingdotgg/uploadthing",
+  },
   useNextSeoProps() {
     return {
       additionalLinkTags: [

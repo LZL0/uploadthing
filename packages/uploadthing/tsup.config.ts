@@ -1,17 +1,14 @@
 import { defineConfig } from "tsup";
 
+import { config } from "@uploadthing/tsup-config";
+
 export default defineConfig((opts) => ({
-  entry: ["./client.ts", "./server.ts", "./next.ts", "./next-legacy.ts"],
-  splitting: false,
-  sourcemap: true,
-  clean: !opts.watch,
-  dts: true,
-  format: ["esm"],
-  ignoreWatch: [
-    "**/.turbo",
-    "**/dist",
-    "**/node_modules",
-    "**/.DS_STORE",
-    "**/.git",
+  ...config,
+  entry: [
+    "./src/client.ts",
+    "./src/server.ts",
+    "./src/next.ts",
+    "./src/next-legacy.ts",
   ],
+  clean: !opts.watch,
 }));

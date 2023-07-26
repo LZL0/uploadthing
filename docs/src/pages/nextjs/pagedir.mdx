@@ -1,12 +1,14 @@
 import { Callout, Steps } from "nextra-theme-docs";
 
-# Getting Started With `/pages`
+# Getting Started With `pages/`
+
+Make sure you
+[install the packages and get your env variables first](/getting-started)
 
 <Callout type="warning">
-  If you're using the `/pages` directory in Next still, you HAVE TO DISABLE THE `esmExternals` FLAG:
+  If you're using the `pages/` directory in Next still, you HAVE TO DISABLE THE `esmExternals` FLAG to prevent esm/cjs errors from our peer dep `react-dropzone`:
 
-```ts
-// next.config.js
+```js filename="next.config.js"
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   experimental: {
@@ -24,16 +26,19 @@ module.exports = nextConfig;
 <Steps>
 ### Creating your first FileRoute
 
-All files uploaded to uploadthing are associated with a FileRoute. Think of a FileRoute similar to an endpoint, it has:
+All files uploaded to uploadthing are associated with a FileRoute. Think of a
+FileRoute similar to an endpoint, it has:
 
 - Permitted types ["image", "video", etc]
 - Max file size
 - (Optional) `middleware` to authenticate and tag requests
 - `onUploadComplete` callback for when uploads are completed
 
-```ts copy
-/** server/uploadthing.ts */
+```tsx copy filename="server/uploadthing.ts"
+import type { NextApiRequest, NextApiResponse } from "next";
+
 import { createUploadthing, type FileRouter } from "uploadthing/next-legacy";
+
 const f = createUploadthing();
 
 const auth = (req: NextApiRequest, res: NextApiResponse) => ({ id: "fakeId" }); // Fake auth function
@@ -41,11 +46,9 @@ const auth = (req: NextApiRequest, res: NextApiResponse) => ({ id: "fakeId" }); 
 // FileRouter for your app, can contain multiple FileRoutes
 export const ourFileRouter = {
   // Define as many FileRoutes as you like, each with a unique routeSlug
-  imageUploader: f
+  imageUploader: f({ image: { maxFileSize: "4MB" } })
     // Set permissions and file types for this FileRoute
-    .fileTypes(["image", "video"])
-    .maxSize("1GB")
-    .middleware(async (req, res) => {
+    .middleware(async ({ req, res }) => {
       // This code runs on your server before upload
       const user = await auth(req, res);
 
@@ -55,9 +58,11 @@ export const ourFileRouter = {
       // Whatever is returned here is accessible in onUploadComplete as `metadata`
       return { userId: user.id };
     })
-    .onUploadComplete(async ({ metadata }) => {
+    .onUploadComplete(async ({ metadata, file }) => {
       // This code RUNS ON YOUR SERVER after upload
       console.log("Upload complete for userId:", metadata.userId);
+
+      console.log("file url", file.url);
     }),
 } satisfies FileRouter;
 
@@ -68,12 +73,13 @@ export type OurFileRouter = typeof ourFileRouter;
 
 <Callout type="warning">
   Note: This is the ONLY FILE WHERE THE PATH MATTERS. You need to serve this API
-  from `pages/api/uploadthing` on your application.
+  from `/api/uploadthing` as it is called via webhook to trigger
+  `onUploadComplete`.
 </Callout>
 
-```ts copy
-/** pages/api/uploadthing.ts */
+```ts copy filename="pages/api/uploadthing.ts"
 import { createNextPageApiHandler } from "uploadthing/next-legacy";
+
 import { ourFileRouter } from "~/server/uploadthing";
 
 const handler = createNextPageApiHandler({
@@ -83,22 +89,45 @@ const handler = createNextPageApiHandler({
 export default handler;
 ```
 
-### Use the FileRouter in your app
+### Creating The UploadThing Components (optional)
 
-The `@uploadthing/react` package includes an "UploadButton" component that you can simply drop into your app, and start uploading files immediately.
+Generating components let's you pass your generic `FileRouter` once and then
+have typesafe components everywhere, instead of having to pass the generic
+everytime you mount a component, but you can also import the components
+individually from `@uploadthing/react`.
 
-```ts copy
-import { UploadButton } from "@uploadthing/react";
+```ts copy filename="src/utils/uploadthing.ts"
+import { generateComponents } from "@uploadthing/react";
 
 import type { OurFileRouter } from "~/server/uploadthing";
+
+export const { UploadButton, UploadDropzone, Uploader } =
+  generateComponents<OurFileRouter>();
+```
+
+### Use the FileRouter in your app
+
+The `@uploadthing/react` package includes an "UploadButton" component that you
+can simply drop into your app, and start uploading files immediately.
+
+```tsx copy filename="app/example-uploader.tsx"
+import { UploadButton } from "~/utils/uploadthing";
+// You need to import our styles for the button to look right. Best to import in the root /_app.tsx but this is fine
+import "@uploadthing/react/styles.css";
 
 export default function Home() {
   return (
     <main className="flex min-h-screen flex-col items-center justify-between p-24">
-      <UploadButton<OurFileRouter>
+      <UploadButton
         endpoint="imageUploader"
-        onClientUploadComplete={() => {
+        onClientUploadComplete={(res) => {
+          // Do something with the response
+          console.log("Files: ", res);
           alert("Upload Completed");
+        }}
+        onUploadError={(error: Error) => {
+          // Do something with the error.
+          alert(`ERROR! ${error.message}`);
         }}
       />
     </main>

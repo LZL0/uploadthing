@@ -1,43 +1,67 @@
-import type { AnyRuntime, FileRouter, FileSize, SizeUnit } from "../types";
-import type { NextApiRequest, NextApiResponse } from "next";
+import type { NextApiResponse } from "next";
 
-const UPLOADTHING_VERSION = require("../../package.json").version;
+import {
+  generateUploadThingURL,
+  getTypeFromFileName,
+  getUploadthingUrl,
+  fillInputRouteConfig as parseAndExpandInputConfig,
+  pollForFileData,
+  UploadThingError,
+} from "@uploadthing/shared";
+import type {
+  ExpandedRouteConfig,
+  FileData,
+  FileRouterInputKey,
+  Json,
+  UploadedFile,
+} from "@uploadthing/shared";
 
-export function fileSizeToBytes(size: FileSize): number {
-  const sizeUnit = size.slice(-2) as SizeUnit;
-  const sizeValue = parseInt(size.slice(0, -2), 10);
-  let bytes: number;
+import { UPLOADTHING_VERSION } from "../constants";
+import { getParseFn } from "./parser";
+import type { AnyRuntime, FileRouter } from "./types";
 
-  switch (sizeUnit) {
-    case "B":
-      bytes = sizeValue;
-      break;
-    case "KB":
-      bytes = sizeValue * 1024;
-      break;
-    case "MB":
-      bytes = sizeValue * 1024 * 1024;
-      break;
-    case "GB":
-      bytes = sizeValue * 1024 * 1024 * 1024;
-      break;
-    default:
-      if (size.slice(-1) === "B") {
-        bytes = parseInt(size.slice(0, -1), 10);
-        break;
-      }
-      throw new Error(`Invalid file size unit: ${sizeUnit}`);
+const fileCountLimitHit = (
+  files: string[],
+  routeConfig: ExpandedRouteConfig,
+) => {
+  const counts: { [k: string]: number } = {};
+
+  files.forEach((file) => {
+    const type = getTypeFromFileName(
+      file,
+      Object.keys(routeConfig) as FileRouterInputKey[],
+    ) as FileRouterInputKey;
+
+    if (!counts[type]) {
+      counts[type] = 1;
+    } else {
+      counts[type] += 1;
+    }
+  });
+
+  for (const _key in counts) {
+    const key = _key as FileRouterInputKey;
+    const count = counts[key];
+    const limit = routeConfig[key]?.maxFileCount;
+
+    if (!limit) {
+      console.error(routeConfig, key);
+      throw new UploadThingError({
+        code: "BAD_REQUEST",
+        message: "Invalid config during file count",
+        cause: `Expected route config to have a maxFileCount for key ${key} but none was found.`,
+      });
+    }
+
+    if (count > limit) {
+      return { limitHit: true, type: key, limit, count };
+    }
   }
 
-  return bytes;
-}
-
-const generateUploadThingURL = (path: `/${string}`) => {
-  const host = process.env.CUSTOM_INFRA_URL ?? "https://uploadthing.com";
-  return `${host}${path}`;
+  return { limitHit: false };
 };
 
-if (process.env.NODE_ENV !== "development") {
+if (process.env.NODE_ENV === "development") {
   console.log("[UT] UploadThing dev server is now running!");
 }
 
@@ -49,90 +73,55 @@ const isValidResponse = (response: Response) => {
   return true;
 };
 
-const withExponentialBackoff = async <T>(
-    doTheThing: () => Promise<T | null>,
-    MAXIMUM_BACKOFF_MS = 64 * 1000,
-    MAX_RETRIES = 20,
-): Promise<T | null> => {
-  let tries = 0;
-  let backoffMs = 500;
-  let backoffFuzzMs = 0;
-
-  let result = null;
-  while (tries <= MAX_RETRIES) {
-    result = await doTheThing();
-    if (result !== null) return result;
-
-    tries += 1;
-    backoffMs = Math.min(MAXIMUM_BACKOFF_MS, backoffMs * 2);
-    backoffFuzzMs = Math.floor(Math.random() * 500);
-
-    console.error(`[UT] Call unsuccessful after ${tries} tries. Retrying in ${Math.floor(backoffMs / 1000)} seconds...`)
-
-    await new Promise(r => setTimeout(r, backoffMs + backoffFuzzMs));
-  }
-
-  return null;
-}
-
 const conditionalDevServer = async (fileKey: string) => {
   if (process.env.NODE_ENV !== "development") return;
 
-  const queryUrl = generateUploadThingURL(`/api/pollUpload/${fileKey}`);
+  const fileData = await pollForFileData(
+    fileKey,
+    async (json: { fileData: FileData }) => {
+      const file = json.fileData;
 
-  const fileData = await withExponentialBackoff(async () => {
-    const res = await fetch(queryUrl);
-    const json = await res.json();
+      let callbackUrl = file.callbackUrl + `?slug=${file.callbackSlug}`;
+      if (!callbackUrl.startsWith("http"))
+        callbackUrl = "http://" + callbackUrl;
 
-    const file = json.fileData;
+      console.log("[UT] SIMULATING FILE UPLOAD WEBHOOK CALLBACK", callbackUrl);
 
-    if (json.status !== "done") return null;
-
-    let callbackUrl = file.callbackUrl + `?slug=${file.callbackSlug}`;
-    if (!callbackUrl.startsWith("http"))
-      callbackUrl = "http://" + callbackUrl;
-
-    console.log("[UT] SIMULATING FILE UPLOAD WEBHOOK CALLBACK", callbackUrl);
-
-    // TODO: Check that we "actually hit our endpoint" and throw a loud error if we didn't
-    const response = await fetch(callbackUrl, {
-      method: "POST",
-      body: JSON.stringify({
-        status: "uploaded",
-        metadata: JSON.parse(file.metadata ?? "{}"),
-        file: {
-          url: `https://uploadthing.com/f/${encodeURIComponent(
-            fileKey ?? ""
-          )}`,
-          name: file.fileName,
+      const response = await fetch(callbackUrl, {
+        method: "POST",
+        body: JSON.stringify({
+          status: "uploaded",
+          metadata: JSON.parse(file.metadata ?? "{}") as FileData["metadata"],
+          file: {
+            url: `https://uploadthing.com/f/${encodeURIComponent(fileKey)}`,
+            key: fileKey,
+            name: file.fileName,
+            size: file.fileSize,
+          },
+        }),
+        headers: {
+          "uploadthing-hook": "callback",
         },
-      }),
-      headers: {
-        "uploadthing-hook": "callback",
-      },
-    });
-    if (isValidResponse(response)) {
-      console.log("[UT] Successfully simulated callback for file", fileKey);
-    } else {
-      console.error(
-        "[UT] Failed to simulate callback for file. Is your webhook configured correctly?",
-        fileKey
-      );
-    }
-    return file;
-  });
+      });
+      if (isValidResponse(response)) {
+        console.log("[UT] Successfully simulated callback for file", fileKey);
+      } else {
+        console.error(
+          "[UT] Failed to simulate callback for file. Is your webhook configured correctly?",
+          fileKey,
+        );
+      }
+      return file;
+    },
+  );
 
   if (fileData !== null) return fileData;
 
   console.error(`[UT] Failed to simulate callback for file ${fileKey}`);
-  throw new Error("File took too long to upload");
-};
-
-const GET_DEFAULT_URL = () => {
-  const vcurl = process.env.VERCEL_URL;
-  if (vcurl) return `https://${vcurl}/api/uploadthing`; // SSR should use vercel url
-
-  return `http://localhost:${process.env.PORT ?? 3000}/api/uploadthing`; // dev SSR should use localhost
+  throw new UploadThingError({
+    code: "UPLOAD_FAILED",
+    message: "File took too long to upload",
+  });
 };
 
 export type RouterWithConfig<TRouter extends FileRouter> = {
@@ -146,34 +135,78 @@ export type RouterWithConfig<TRouter extends FileRouter> = {
 
 export const buildRequestHandler = <
   TRouter extends FileRouter,
-  TRuntime extends AnyRuntime
+  TRuntime extends AnyRuntime,
 >(
-  opts: RouterWithConfig<TRouter>
+  opts: RouterWithConfig<TRouter>,
 ) => {
   return async (input: {
-    uploadthingHook?: string;
-    slug?: string;
-    actionType?: string;
-    req: TRuntime extends "pages" ? NextApiRequest : Partial<Request>;
+    req: Partial<Request> & { json: Request["json"] };
     res?: TRuntime extends "pages" ? NextApiResponse : undefined;
   }) => {
+    const { req, res } = input;
     const { router, config } = opts;
-    const upSecret = config?.uploadthingId ?? process.env.UPLOADTHING_SECRET;
+    const preferredOrEnvSecret =
+      config?.uploadthingSecret ?? process.env.UPLOADTHING_SECRET;
 
-    const { uploadthingHook, slug, req, res, actionType } = input;
-    if (!slug) throw new Error("we need a slug");
-    const uploadable = router[slug];
+    // Get inputs from query and params
+    const params = new URL(req.url ?? "", getUploadthingUrl()).searchParams;
+    const uploadthingHook = req.headers?.get("uploadthing-hook") ?? undefined;
+    const slug = params.get("slug") ?? undefined;
+    const actionType = params.get("actionType") ?? undefined;
 
-    if (!uploadable) {
-      return { status: 404 };
+    // Validate inputs
+    if (!slug)
+      return new UploadThingError({
+        code: "BAD_REQUEST",
+        message: "No slug provided",
+      });
+
+    if (slug && typeof slug !== "string") {
+      return new UploadThingError({
+        code: "BAD_REQUEST",
+        message: "`slug` must be a string",
+        cause: `Expected slug to be of type 'string', got '${typeof slug}'`,
+      });
+    }
+    if (actionType && typeof actionType !== "string") {
+      return new UploadThingError({
+        code: "BAD_REQUEST",
+        message: "`actionType` must be a string",
+        cause: `Expected actionType to be of type 'string', got '${typeof actionType}'`,
+      });
+    }
+    if (uploadthingHook && typeof uploadthingHook !== "string") {
+      return new UploadThingError({
+        code: "BAD_REQUEST",
+        message: "`uploadthingHook` must be a string",
+        cause: `Expected uploadthingHook to be of type 'string', got '${typeof uploadthingHook}'`,
+      });
     }
 
-    const reqBody =
-      "body" in req && typeof req.body === "string"
-        ? JSON.parse(req.body)
-        : await (req as Request).json();
+    if (!preferredOrEnvSecret) {
+      return new UploadThingError({
+        code: "BAD_REQUEST",
+        message: `Please set your preferred secret in ${slug} router's config or set UPLOADTHING_SECRET in your env file`,
+        cause: "No secret provided",
+      });
+    }
 
-    if (uploadthingHook && uploadthingHook === "callback") {
+    const uploadable = router[slug];
+    if (!uploadable) {
+      return new UploadThingError({
+        code: "NOT_FOUND",
+        message: `No file route found for slug ${slug}`,
+      });
+    }
+
+    const reqBody = (await req.json()) as {
+      file: UploadedFile;
+      files: unknown;
+      metadata: Record<string, unknown>;
+      input?: Json;
+    };
+
+    if (uploadthingHook === "callback") {
       // This is when we receive the webhook from uploadthing
       await uploadable.resolver({
         file: reqBody.file,
@@ -184,57 +217,115 @@ export const buildRequestHandler = <
     }
 
     if (!actionType || actionType !== "upload") {
-      // This would either be someone spamming
-      // or the AWS webhook
-
-      return { status: 404 };
+      // This would either be someone spamming or the AWS webhook
+      return new UploadThingError({
+        code: "BAD_REQUEST",
+        cause: `Invalid action type ${actionType}`,
+        message: `Expected "upload" but got "${actionType}"`,
+      });
     }
 
     try {
-      const { files } = reqBody;
-      // @ts-expect-error TODO: Fix this
-      const metadata = await uploadable._def.middleware(req as Request, res);
+      const { files, input: userInput } = reqBody as {
+        files: string[];
+        input: Json;
+      };
 
-      // Once that passes, persist in DB
+      // validate the input
+      let parsedInput: Json = {};
+      try {
+        const inputParser = uploadable._def.inputParser;
+        parsedInput = await getParseFn(inputParser)(userInput);
+      } catch (error) {
+        return new UploadThingError({
+          code: "BAD_REQUEST",
+          message: "Invalid input",
+          cause: error,
+        });
+      }
+
+      let metadata: Json = {};
+      try {
+        metadata = await uploadable._def.middleware({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+          req: req as any,
+          res,
+          input: parsedInput,
+        });
+      } catch (error) {
+        return new UploadThingError({
+          code: "BAD_REQUEST",
+          message: "An error occured in the upload middleware",
+          cause: error,
+        });
+      }
 
       // Validate without Zod (for now)
       if (!Array.isArray(files) || !files.every((f) => typeof f === "string"))
-        throw new Error("Need file array");
+        return new UploadThingError({
+          code: "BAD_REQUEST",
+          message: "Files must be a string array",
+          cause: `Expected files to be of type 'string[]', got '${JSON.stringify(
+            files,
+          )}'`,
+        });
 
-      // TODO: Make this a function
+      // FILL THE ROUTE CONFIG so the server only has one happy path
+      const parsedConfig = parseAndExpandInputConfig(
+        uploadable._def.routerConfig,
+      );
+
+      const { limitHit, count, limit, type } = fileCountLimitHit(
+        files,
+        parsedConfig,
+      );
+
+      if (limitHit)
+        return new UploadThingError({
+          code: "BAD_REQUEST",
+          message: "File limit exceeded",
+          cause: `You uploaded ${count} files of type '${type}', but the limit for that type is ${limit}`,
+        });
+
       const uploadthingApiResponse = await fetch(
         generateUploadThingURL("/api/prepareUpload"),
         {
           method: "POST",
           body: JSON.stringify({
             files: files,
-            fileTypes: uploadable._def.fileTypes,
+            routeConfig: parsedConfig,
             metadata,
-            callbackUrl: config?.callbackUrl ?? GET_DEFAULT_URL(),
+            callbackUrl: config?.callbackUrl ?? getUploadthingUrl(),
             callbackSlug: slug,
-            maxFileSize: fileSizeToBytes(uploadable._def.maxSize ?? "16MB"),
           }),
           headers: {
             "Content-Type": "application/json",
-            "x-uploadthing-api-key": upSecret ?? "",
+            "x-uploadthing-api-key": preferredOrEnvSecret,
             "x-uploadthing-version": UPLOADTHING_VERSION,
           },
-        }
+        },
       );
 
       if (!uploadthingApiResponse.ok) {
         console.error("[UT] unable to get presigned urls");
         try {
-          const error = await uploadthingApiResponse.json();
+          const error = (await uploadthingApiResponse.json()) as unknown;
           console.error(error);
-        } catch (e) {
+          return new UploadThingError({
+            code: "BAD_REQUEST",
+            cause: error,
+          });
+        } catch (cause) {
           console.error("[UT] unable to parse response");
+          return new UploadThingError({
+            code: "URL_GENERATION_FAILED",
+            message: "Unable to get presigned urls",
+            cause,
+          });
         }
-        throw new Error("ending upload");
       }
 
-      // This is when we send the response back to our form so it can submit the files
-
+      // This is when we send the response back to the user's form so they can submit the files
       const parsedResponse = (await uploadthingApiResponse.json()) as {
         presignedUrl: { url: string; fields: Record<string, string> }; // ripped type from S3 package
         name: string;
@@ -242,33 +333,36 @@ export const buildRequestHandler = <
       }[];
 
       if (process.env.NODE_ENV === "development") {
-        parsedResponse.forEach((file) => {
-          conditionalDevServer(file.key);
-        });
+        for (const file of parsedResponse) {
+          void conditionalDevServer(file.key);
+        }
       }
 
       return { body: parsedResponse, status: 200 };
-    } catch (e) {
+    } catch (cause) {
       console.error("[UT] middleware failed to run");
-      console.error(e);
-
-      return { status: 400 };
+      console.error(cause);
+      return new UploadThingError({
+        code: "BAD_REQUEST",
+        message: `An error occured when running the middleware for the ${slug} route`,
+        cause,
+      });
     }
   };
 };
 
 export const buildPermissionsInfoHandler = <TRouter extends FileRouter>(
-  opts: RouterWithConfig<TRouter>
+  opts: RouterWithConfig<TRouter>,
 ) => {
   return () => {
     const r = opts.router;
 
     const permissions = Object.keys(r).map((k) => {
       const route = r[k];
+      const config = parseAndExpandInputConfig(route._def.routerConfig);
       return {
         slug: k as keyof TRouter,
-        maxSize: route._def.maxSize,
-        fileTypes: route._def.fileTypes,
+        config,
       };
     });
 

@@ -1,12 +1,11 @@
 import { defineConfig } from "tsup";
 
+import { config } from "@uploadthing/tsup-config";
+
 export default defineConfig((opts) => ({
-  entry: ["./index.ts", "./hooks.ts"],
-  splitting: false,
-  sourcemap: true,
+  ...config,
+  entry: ["./src/index.ts", "./src/hooks.ts"],
   clean: !opts.watch,
-  dts: true,
-  format: ["esm"],
   esbuildOptions: (option) => {
     option.banner = {
       js: `"use client";`,

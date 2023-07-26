@@ -5,9 +5,16 @@
     { "repo": "pingdotgg/uploadthing" }
   ],
   "commit": false,
-  "fixed": [["uploadthing", "@uploadthing/react"]],
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": ["@example/appdir", "@example/pagedir", "docs"]
+  "___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH": {
+    "onlyUpdatePeerDependentsWhenOutOfRange": true
+  },
+  "ignore": [
+    "@example/appdir",
+    "@example/pagedir",
+    "@example/solidstart",
+    "docs"
+  ]
 }
