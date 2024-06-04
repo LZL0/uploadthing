@@ -48,7 +48,7 @@
     "@uploadthing/eslint-config": "0.1.0",
     "@uploadthing/tsconfig": "0.1.0",
     "@uploadthing/tsup-config": "0.1.0",
-    "autoprefixer": "10.4.14",
+    "autoprefixer": "10.4.19",
     "eslint": "^8.42.0",
     "postcss": "8.4.22",
     "react": "18.2.0",
